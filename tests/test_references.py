@@ -10,6 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 FETCH_SCRIPT = ROOT / "references" / "fetch_paper.py"
 PAPER_README = ROOT / "references" / "README.md"
+FIDELITY_DOC = ROOT / "docs" / "PAPER_FIDELITY.md"
 
 
 def _load_fetch_module():
@@ -104,3 +105,16 @@ def test_reference_docs_pin_primary_sources_and_integrity_metadata() -> None:
         "AlphaGoNaturePaper.pdf"
     ) in readme
     assert "9c9184385a3d37b4f4e9d9715270986c43172747b1d08f29093128c1ef878b60" in readme
+
+
+def test_fidelity_doc_preserves_the_paper_checkpoint_and_search_boundary() -> None:
+    fidelity = FIDELITY_DOC.read_text(encoding="utf-8")
+
+    assert "frozen `sl_policy` supplies MCTS priors" in fidelity
+    assert "c_{\\mathrm{puct}}" in fidelity
+    assert "N_v(s,a), N_r(s,a), W_v(s,a), W_r(s,a)" in fidelity
+    assert "AlphaGo is not AlphaGo Zero" in fidelity
+    assert "https://doi.org/10.1038/nature24270" in fidelity
+    assert "https://github.com/googlecolab/google-colab-cli" in fidelity
+    assert "google-colab-cli==0.6.0" in fidelity
+    assert "no code cell has an `error` output" in fidelity
