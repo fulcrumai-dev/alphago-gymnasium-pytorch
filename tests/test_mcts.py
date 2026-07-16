@@ -107,22 +107,55 @@ def test_backup_uses_each_nodes_player_perspective() -> None:
 
 
 def test_leaf_evaluation_mixes_value_and_rollout_separately() -> None:
-    def pessimistic_value(position: OneMovePosition) -> float:
-        # Leaf player loses after root action 0 and wins after root action 1.
-        return position.outcome(position.to_play)
+    @dataclass(frozen=True)
+    class TwoMovePosition:
+        to_play: int = 1
+        depth: int = 0
+        first_action: int | None = None
 
-    def optimistic_rollout(position: OneMovePosition, rng: np.random.Generator) -> float:
+        @property
+        def action_size(self) -> int:
+            return 2
+
+        @property
+        def is_terminal(self) -> bool:
+            return self.depth == 2
+
+        def legal_actions_mask(self) -> np.ndarray:
+            return np.array([not self.is_terminal] * 2, dtype=np.bool_)
+
+        def play(self, action: int) -> "TwoMovePosition":
+            return TwoMovePosition(
+                to_play=-self.to_play,
+                depth=self.depth + 1,
+                first_action=action if self.depth == 0 else self.first_action,
+            )
+
+        def outcome(self, player: int) -> float:
+            if not self.is_terminal:
+                raise RuntimeError("game is not over")
+            black_result = 1 if self.first_action == 0 else -1
+            return float(black_result * player)
+
+        def encode(self) -> np.ndarray:
+            return np.full((1, 1, 1), self.to_play, dtype=np.float32)
+
+    def pessimistic_value(position: TwoMovePosition) -> float:
+        # The child player loses after root action 0 and wins after action 1.
+        return -1.0 if position.first_action == 0 else 1.0
+
+    def optimistic_rollout(position: TwoMovePosition, rng: np.random.Generator) -> float:
         del rng
-        return -position.outcome(position.to_play)
+        return 1.0 if position.first_action == 0 else -1.0
 
     mcts = AlphaGoMCTS(
-        policy=uniform_policy,
+        policy=lambda _: np.array([0.5, 0.5]),
         value=pessimistic_value,
         rollout=optimistic_rollout,
-        config=MCTSConfig(num_simulations=2, c_puct=1.0, mixing_lambda=0.25),
+        config=MCTSConfig(num_simulations=1, c_puct=1.0, mixing_lambda=0.25),
         seed=11,
     )
-    result = mcts.search(OneMovePosition())
+    result = mcts.search(TwoMovePosition())
 
     visited = np.flatnonzero(result.visit_counts)
     assert len(visited) >= 1
@@ -175,5 +208,4 @@ def test_rollout_evaluator_returns_leaf_player_outcome() -> None:
 
     assert rollout(root, np.random.default_rng(0)) == 1.0
     terminal = root.play(1)
-    assert rollout(terminal, np.random.default_rng(0)) == terminal.outcome(-1)
-
+    assert rollout(terminal, np.random.default_rng(0)) == terminal.outcome(terminal.to_play)
