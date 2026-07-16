@@ -615,6 +615,65 @@ def test_value_completion_reserves_forced_passes_and_keeps_one_target() -> None:
     assert rl_calls == [2]
 
 
+def test_value_opening_range_varies_per_game_and_is_reproducible() -> None:
+    def no_pass(position: PassCappedPosition) -> np.ndarray:
+        del position
+        return np.array([1.0, 0.0, 0.0])
+
+    def generate(seed: int) -> list[ValueExample]:
+        return generate_value_examples(
+            PassCappedPosition,
+            no_pass,
+            no_pass,
+            num_games=40,
+            opening_moves=(0, 3),
+            rng=np.random.default_rng(seed),
+            max_moves=7,
+        )
+
+    first = generate(812)
+    second = generate(812)
+    depths = [int(example.observation[1, 0, 0]) for example in first]
+
+    assert len(first) == 40
+    assert set(depths) == {1, 2, 3, 4}  # inclusive prefix range, plus random move
+    for first_example, second_example in zip(first, second, strict=True):
+        np.testing.assert_array_equal(
+            first_example.observation, second_example.observation
+        )
+        assert first_example.outcome == second_example.outcome
+
+
+@pytest.mark.parametrize(
+    "opening_moves",
+    [(-1, 2), (3, 2), (0,), (True, 2), (0, 2.5)],
+)
+def test_value_opening_range_validation(opening_moves: object) -> None:
+    with pytest.raises(ValueError, match="opening_moves"):
+        generate_value_examples(
+            PassCappedPosition,
+            lambda _: np.array([1.0, 0.0, 0.0]),
+            lambda _: np.array([1.0, 0.0, 0.0]),
+            num_games=1,
+            opening_moves=opening_moves,  # type: ignore[arg-type]
+            rng=np.random.default_rng(0),
+            max_moves=8,
+        )
+
+
+def test_value_opening_range_budget_covers_largest_prefix() -> None:
+    with pytest.raises(ValueError, match="opening.*random.*two.*pass"):
+        generate_value_examples(
+            PassCappedPosition,
+            lambda _: np.array([1.0, 0.0, 0.0]),
+            lambda _: np.array([1.0, 0.0, 0.0]),
+            num_games=1,
+            opening_moves=(0, 3),
+            rng=np.random.default_rng(0),
+            max_moves=5,
+        )
+
+
 def test_value_generation_requires_budget_for_opening_random_move_and_passes() -> None:
     with pytest.raises(ValueError, match="opening.*random.*two.*pass"):
         generate_value_examples(
