@@ -278,6 +278,38 @@ def test_reinforce_epoch_uses_baseline_entropy_and_legal_log_probability() -> No
     assert baseline.value.grad is None
 
 
+def test_reinforce_keeps_gradient_for_extremely_unlikely_legal_action() -> None:
+    model = BiasPolicy((-1000.0, 0.0))
+    optimizer = torch.optim.SGD(model.parameters(), lr=200.0)
+    step = PolicyGradientStep(
+        observation=np.zeros((1, 1, 1), dtype=np.float32),
+        action=0,
+        legal_mask=np.array([True, True], dtype=np.bool_),
+        player=1,
+    )
+    episode = PolicyGradientEpisode(
+        steps=(step,), outcome=1.0, learner_player=1
+    )
+    before_logits = model.logits.detach().clone()
+    before_probability = torch.softmax(before_logits.double(), dim=-1)[0]
+
+    loss = train_reinforce_epoch(
+        model,
+        [episode],
+        optimizer,
+        batch_size=1,
+        shuffle=False,
+    )
+    after_probability = torch.softmax(model.logits.detach().double(), dim=-1)[0]
+
+    assert np.isfinite(loss)
+    assert model.logits.grad is not None
+    assert torch.isfinite(model.logits.grad).all()
+    assert torch.count_nonzero(model.logits.grad) == 2
+    assert model.logits[0] > before_logits[0]
+    assert after_probability > before_probability
+
+
 @dataclass(frozen=True)
 class _TwoActionView(LegalPosition):
     def legal_actions_mask(self) -> np.ndarray:
