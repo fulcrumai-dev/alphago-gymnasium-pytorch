@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "alphago-gymnasium-pytorch"
+version = "0.1.0"
+description = "An educational, scaled reimplementation of the 2016 AlphaGo paper"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { file = "LICENSE" }
+authors = [{ name = "fulcrumai-dev" }]
+dependencies = [
+  "gymnasium>=1.0,<2",
+  "matplotlib>=3.8,<4",
+  "numpy>=1.26,<3",
+  "torch>=2.2,<3",
+  "tqdm>=4.66,<5",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ipykernel>=6.29,<8",
+  "jupyter>=1.1,<2",
+  "nbclient>=0.10,<1",
+  "nbformat>=5.10,<6",
+  "pytest>=8.3,<10",
+  "pytest-cov>=6,<8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alphago_gym"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "integration: component integration tests",
+  "slow: deliberately slower full-pipeline tests",
+  "mps: tests requiring Apple Metal Performance Shaders",
+  "cuda: tests requiring an NVIDIA CUDA runtime",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["alphago_gym"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
