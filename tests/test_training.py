@@ -311,6 +311,36 @@ def test_reinforce_keeps_gradient_for_extremely_unlikely_legal_action() -> None:
     assert after_probability > before_probability
 
 
+def test_reinforce_update_is_symmetric_for_negative_outcome() -> None:
+    positive_model = BiasPolicy((0.0, 0.0))
+    negative_model = BiasPolicy((0.0, 0.0))
+    positive_optimizer = torch.optim.SGD(positive_model.parameters(), lr=0.2)
+    negative_optimizer = torch.optim.SGD(negative_model.parameters(), lr=0.2)
+    step = PolicyGradientStep(
+        observation=np.zeros((1, 1, 1), dtype=np.float32),
+        action=0,
+        legal_mask=np.array([True, True], dtype=np.bool_),
+        player=1,
+    )
+
+    train_reinforce_epoch(
+        positive_model,
+        [PolicyGradientEpisode((step,), outcome=1.0, learner_player=1)],
+        positive_optimizer,
+        shuffle=False,
+    )
+    train_reinforce_epoch(
+        negative_model,
+        [PolicyGradientEpisode((step,), outcome=-1.0, learner_player=1)],
+        negative_optimizer,
+        shuffle=False,
+    )
+
+    torch.testing.assert_close(positive_model.logits, -negative_model.logits)
+    assert torch.softmax(positive_model.logits.detach(), dim=-1)[0] > 0.5
+    assert torch.softmax(negative_model.logits.detach(), dim=-1)[0] < 0.5
+
+
 @dataclass(frozen=True)
 class _TwoActionView(LegalPosition):
     def legal_actions_mask(self) -> np.ndarray:
@@ -388,6 +418,35 @@ def test_alternating_episode_records_only_learner_legal_steps_and_perspective() 
     assert episode.steps[0].player == 1
     assert episode.steps[0].action == 0
     assert episode.steps[0].legal_mask[episode.steps[0].action]
+
+
+def test_alternating_episode_scores_white_learner_from_white_perspective() -> None:
+    learner_calls: list[int] = []
+    opponent_calls: list[int] = []
+
+    def white_learner(position: AlternatingPosition) -> np.ndarray:
+        learner_calls.append(position.to_play)
+        return np.array([0.0, 1.0, 0.0])
+
+    def black_opponent(position: AlternatingPosition) -> np.ndarray:
+        opponent_calls.append(position.to_play)
+        return np.array([1.0, 0.0, 0.0])
+
+    episode = generate_policy_gradient_episode(
+        AlternatingPosition(),
+        white_learner,
+        black_opponent,
+        learner_player=-1,
+        rng=np.random.default_rng(3),
+    )
+
+    assert learner_calls == [-1]
+    assert opponent_calls == [1]
+    assert episode.learner_player == -1
+    assert episode.outcome == -1.0
+    assert len(episode.steps) == 1
+    assert episode.steps[0].player == -1
+    assert episode.steps[0].action == 1
 
 
 @dataclass(frozen=True)
