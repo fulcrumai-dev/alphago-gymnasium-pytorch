@@ -4,8 +4,18 @@ from dataclasses import dataclass
 
 import numpy as np
 import pytest
+import torch
+from torch import nn
 
-from alphago_gym.mcts import AlphaGoMCTS, MCTSConfig, PolicyRolloutEvaluator
+from alphago_gym.go import GoPosition
+from alphago_gym.mcts import (
+    AlphaGoMCTS,
+    MCTSConfig,
+    NeuralPolicyEvaluator,
+    NeuralValueEvaluator,
+    PolicyRolloutEvaluator,
+)
+from alphago_gym.models import PolicyNetwork, ValueNetwork
 
 
 @dataclass(frozen=True)
@@ -209,3 +219,159 @@ def test_rollout_evaluator_returns_leaf_player_outcome() -> None:
     assert rollout(root, np.random.default_rng(0)) == 1.0
     terminal = root.play(1)
     assert rollout(terminal, np.random.default_rng(0)) == terminal.outcome(terminal.to_play)
+
+
+def test_search_rejects_terminal_and_malformed_position_contracts() -> None:
+    search = AlphaGoMCTS(uniform_policy, zero_value, terminal_rollout, seed=0)
+    with pytest.raises(ValueError, match="terminal position"):
+        search.search(OneMovePosition(result_for_black=1))
+
+    @dataclass(frozen=True)
+    class BadMask(OneMovePosition):
+        def legal_actions_mask(self) -> np.ndarray:
+            return np.array([True], dtype=np.bool_)
+
+    with pytest.raises(ValueError, match="mask has the wrong shape"):
+        search.search(BadMask())
+
+    @dataclass(frozen=True)
+    class NoMoves(OneMovePosition):
+        def legal_actions_mask(self) -> np.ndarray:
+            return np.array([False, False], dtype=np.bool_)
+
+    with pytest.raises(ValueError, match="no legal actions"):
+        search.search(NoMoves())
+
+    wrong_policy = AlphaGoMCTS(
+        lambda _: np.ones(3), zero_value, terminal_rollout, seed=0
+    )
+    with pytest.raises(ValueError, match="wrong number of actions"):
+        wrong_policy.search(OneMovePosition())
+
+
+@dataclass(frozen=True)
+class TwoPlyPosition:
+    to_play: int = 1
+    depth: int = 0
+
+    @property
+    def action_size(self) -> int:
+        return 1
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.depth >= 2
+
+    def legal_actions_mask(self) -> np.ndarray:
+        return np.array([not self.is_terminal], dtype=np.bool_)
+
+    def play(self, action: int) -> "TwoPlyPosition":
+        if action != 0 or self.is_terminal:
+            raise ValueError("illegal")
+        return TwoPlyPosition(to_play=-self.to_play, depth=self.depth + 1)
+
+    def outcome(self, player: int) -> float:
+        if not self.is_terminal:
+            raise RuntimeError("not terminal")
+        return float(player)
+
+    def encode(self) -> np.ndarray:
+        return np.zeros((1, 1, 1), dtype=np.float32)
+
+
+@pytest.mark.parametrize(
+    ("value", "rollout", "message"),
+    [
+        (lambda _: np.nan, terminal_rollout, "value evaluator"),
+        (zero_value, lambda _position, _rng: np.inf, "rollout evaluator"),
+    ],
+)
+def test_search_rejects_nonfinite_leaf_evaluations(value, rollout, message) -> None:
+    search = AlphaGoMCTS(
+        policy=lambda _: np.ones(1),
+        value=value,
+        rollout=rollout,
+        config=MCTSConfig(num_simulations=1),
+        seed=0,
+    )
+    with pytest.raises(ValueError, match=message):
+        search.search(TwoPlyPosition())
+
+
+def test_rollout_validation_fallback_forced_pass_and_move_limit() -> None:
+    with pytest.raises(ValueError, match="max_moves"):
+        PolicyRolloutEvaluator(uniform_policy, max_moves=0)
+
+    wrong_shape = PolicyRolloutEvaluator(lambda _: np.ones(3), max_moves=1)
+    with pytest.raises(ValueError, match="wrong number of actions"):
+        wrong_shape(OneMovePosition(), np.random.default_rng(0))
+
+    uniform_fallback = PolicyRolloutEvaluator(lambda _: np.zeros(2), max_moves=1)
+    assert abs(uniform_fallback(OneMovePosition(), np.random.default_rng(0))) == 1.0
+
+    # A Go rollout that reaches its cap is terminated safely by two passes.
+    go_rollout = PolicyRolloutEvaluator(
+        lambda position: np.zeros(position.action_size), max_moves=1
+    )
+    assert abs(go_rollout(GoPosition(size=3), np.random.default_rng(2))) == 1.0
+
+    @dataclass(frozen=True)
+    class EndlessPosition:
+        to_play: int = 1
+        action_size: int = 1
+        is_terminal: bool = False
+
+        def legal_actions_mask(self) -> np.ndarray:
+            return np.array([True])
+
+        def play(self, action: int) -> "EndlessPosition":
+            return self
+
+        def outcome(self, player: int) -> float:
+            raise RuntimeError
+
+        def encode(self) -> np.ndarray:
+            return np.zeros((1, 1, 1), dtype=np.float32)
+
+    with pytest.raises(RuntimeError, match="did not reach"):
+        PolicyRolloutEvaluator(lambda _: np.ones(1), max_moves=1)(
+            EndlessPosition(), np.random.default_rng(0)
+        )
+
+
+def test_neural_evaluators_mask_actions_bound_values_and_restore_mode() -> None:
+    position = GoPosition(size=3).play(0)
+    policy = PolicyNetwork(board_size=3, channels=4, depth=1).train()
+    value = ValueNetwork(
+        board_size=3, channels=4, depth=1, hidden_channels=4
+    ).eval()
+
+    probabilities = NeuralPolicyEvaluator(policy, device="cpu")(position)
+    estimate = NeuralValueEvaluator(value, device="cpu")(position)
+
+    assert policy.training
+    assert not value.training
+    assert probabilities.shape == (position.action_size,)
+    assert np.isclose(probabilities.sum(), 1.0)
+    assert np.all(probabilities[~position.legal_actions_mask()] == 0.0)
+    assert -1.0 <= estimate <= 1.0
+
+    with pytest.raises(ValueError, match="temperature"):
+        NeuralPolicyEvaluator(policy, temperature=0)
+
+
+def test_neural_evaluators_restore_training_mode_when_model_raises() -> None:
+    class BrokenModel(nn.Module):
+        def forward(self, observations: torch.Tensor) -> torch.Tensor:
+            raise RuntimeError("intentional")
+
+    position = GoPosition(size=3)
+    policy = BrokenModel().train()
+    value = BrokenModel().train()
+
+    with pytest.raises(RuntimeError, match="intentional"):
+        NeuralPolicyEvaluator(policy)(position)
+    with pytest.raises(RuntimeError, match="intentional"):
+        NeuralValueEvaluator(value)(position)
+    assert policy.training
+    assert value.training
