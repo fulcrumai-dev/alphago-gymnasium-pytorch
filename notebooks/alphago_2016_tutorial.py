@@ -89,6 +89,13 @@ else:
             raise RuntimeError("Run this notebook from the cloned project directory.")
         PROJECT_ROOT = candidates[0]
 
+# An editable install performed inside an already-running Colab kernel is not
+# guaranteed to refresh that kernel's import search path.  Add the src-layout
+# directory explicitly so the very next cell can import the cloned package.
+SOURCE_ROOT = PROJECT_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
 os.chdir(PROJECT_ROOT)
 print(f"Project: {PROJECT_ROOT}")
 print(f"Hosted Colab: {IN_COLAB}")

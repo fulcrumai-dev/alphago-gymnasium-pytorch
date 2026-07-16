@@ -70,6 +70,8 @@ def test_notebook_routes_checkpoints_and_checks_accelerator() -> None:
     )
     assert "len(set(checkpoint_fingerprints)) > 1" in rl_loop
     assert "select_device(" in code
+    assert 'SOURCE_ROOT = PROJECT_ROOT / "src"' in code
+    assert "sys.path.insert(0, str(SOURCE_ROOT))" in code
     assert "check_env(" in code
     assert "MPS tensor execution" not in code  # success text is backend-neutral
     assert "tensor execution" in code

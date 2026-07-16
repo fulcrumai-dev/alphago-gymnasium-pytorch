@@ -12,4 +12,5 @@ build/
 dist/
 artifacts/
 notebooks/.executed/
+notebooks/*_output.ipynb
 references/AlphaGoNaturePaper.pdf
