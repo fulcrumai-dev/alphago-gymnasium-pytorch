@@ -12,6 +12,30 @@ def point(row: int, col: int, size: int) -> int:
     return row * size + col
 
 
+def overwrite_board_data(board: np.ndarray) -> None:
+    board[0, 0] = BLACK
+
+
+def overwrite_board_shape(board: np.ndarray) -> None:
+    board.shape = (2, 8)
+
+
+def overwrite_board_dtype(board: np.ndarray) -> None:
+    board.dtype = np.uint16
+
+
+def overwrite_board_strides(board: np.ndarray) -> None:
+    board.strides = (1, 4)
+
+
+def resize_board(board: np.ndarray) -> None:
+    board.resize((2, 8))
+
+
+def make_board_writeable(board: np.ndarray) -> None:
+    board.setflags(write=True)
+
+
 def test_new_position_has_expected_defaults_and_action_contract() -> None:
     position = GoPosition(size=3, komi=5.5)
 
@@ -58,6 +82,42 @@ def test_position_is_deeply_immutable() -> None:
         position.board.setflags(write=True)
     with pytest.raises(FrozenInstanceError):
         position.to_play = WHITE  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        overwrite_board_data,
+        overwrite_board_shape,
+        overwrite_board_dtype,
+        overwrite_board_strides,
+        resize_board,
+        make_board_writeable,
+    ],
+    ids=["data", "shape", "dtype", "strides", "resize", "writeable-flag"],
+)
+def test_board_rejects_data_and_metadata_mutation_without_corrupting_position(
+    mutator: object,
+) -> None:
+    position = GoPosition(size=4, komi=0.5)
+    board_reference = position.board
+    expected_key = position.position_key
+    expected_encoding = position.encode()
+    expected_legal = position.legal_actions_mask()
+    expected_child = position.play(5)
+
+    with pytest.raises((AttributeError, TypeError, ValueError)):
+        mutator(board_reference)  # type: ignore[operator]
+
+    assert position.board is board_reference
+    assert position.board.shape == (4, 4)
+    assert position.board.dtype == np.int8
+    assert position.position_key == expected_key
+    np.testing.assert_array_equal(position.encode(), expected_encoding)
+    np.testing.assert_array_equal(position.legal_actions_mask(), expected_legal)
+    actual_child = position.play(5)
+    np.testing.assert_array_equal(actual_child.board, expected_child.board)
+    assert actual_child.history == expected_child.history
 
 
 def test_play_returns_a_new_position_without_mutating_the_parent() -> None:
