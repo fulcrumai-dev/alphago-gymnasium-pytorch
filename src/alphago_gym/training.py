@@ -19,7 +19,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .models import masked_softmax
+from .models import mask_logits, masked_softmax
 
 
 class TrainingPosition(Protocol):
@@ -272,6 +272,25 @@ def _position_legal_mask(position: TrainingPosition) -> np.ndarray:
     return legal
 
 
+def _force_passes_to_termination(position: TrainingPosition) -> TrainingPosition:
+    """End a Go game with at most two legal passes, outside policy sampling."""
+
+    current = position
+    for _ in range(2):
+        if current.is_terminal:
+            return current
+        legal = _position_legal_mask(current)
+        pass_action = int(current.pass_action)
+        if pass_action < 0 or pass_action >= int(current.action_size):
+            raise ValueError("pass_action is outside the action space")
+        if not legal[pass_action]:
+            raise ValueError("pass action must be legal when forcing game termination")
+        current = current.play(pass_action)
+    if not current.is_terminal:
+        raise RuntimeError("two forced passes did not terminate the game")
+    return current
+
+
 def legal_policy_probabilities(
     policy: Policy,
     position: TrainingPosition,
@@ -479,11 +498,14 @@ def train_reinforce_epoch(
     model.to(resolved_device)
     model.train()
 
+    baseline_module = (
+        value_baseline if isinstance(value_baseline, nn.Module) else None
+    )
     baseline_was_training: bool | None = None
-    if isinstance(value_baseline, nn.Module):
-        value_baseline.to(resolved_device)
-        baseline_was_training = value_baseline.training
-        value_baseline.eval()
+    if baseline_module is not None:
+        baseline_module.to(resolved_device)
+        baseline_was_training = baseline_module.training
+        baseline_module.eval()
 
     total_loss = 0.0
     try:
@@ -527,14 +549,22 @@ def train_reinforce_epoch(
             if not bool(chosen_is_legal.all().item()):
                 raise ValueError("a policy-gradient action is illegal in its state")
 
-            probabilities = masked_softmax(logits, legal_masks)
-            tiny = torch.finfo(probabilities.dtype).tiny
-            chosen_log_probabilities = probabilities.gather(
+            # Work in log space so a legal move remains trainable even when its
+            # float32 probability underflows to zero. Exponentiating the masked
+            # log probabilities still gives exactly zero probability to illegal
+            # moves. Replacing their -inf log values before the entropy product
+            # avoids the undefined 0 * -inf operation.
+            log_probabilities = F.log_softmax(
+                mask_logits(logits, legal_masks), dim=-1
+            )
+            probabilities = log_probabilities.exp()
+            chosen_log_probabilities = log_probabilities.gather(
                 1, actions.unsqueeze(1)
-            ).squeeze(1).clamp_min(tiny).log()
-            entropy = -(
-                probabilities * probabilities.clamp_min(tiny).log()
-            ).sum(dim=-1)
+            ).squeeze(1)
+            finite_log_probabilities = log_probabilities.masked_fill(
+                ~legal_masks, 0.0
+            )
+            entropy = -(probabilities * finite_log_probabilities).sum(dim=-1)
 
             if value_baseline is None:
                 baseline = torch.zeros_like(batch_outcomes)
@@ -556,8 +586,8 @@ def train_reinforce_epoch(
             optimizer.step()
             total_loss += float(loss.detach().item()) * len(batch_indices)
     finally:
-        if isinstance(value_baseline, nn.Module) and baseline_was_training is not None:
-            value_baseline.train(baseline_was_training)
+        if baseline_module is not None and baseline_was_training is not None:
+            baseline_module.train(baseline_was_training)
 
     return total_loss / len(indices)
 
@@ -577,10 +607,18 @@ def generate_policy_gradient_episode(
 
     Only learner actions are retained because the opponent is not updated. The
     final return is explicitly converted to the learner's player perspective.
+    The last two move slots are reserved for legal forced passes, guaranteeing
+    bounded Go episodes even when both sampled policies assign pass zero mass.
+    Those cap passes are deliberately absent from the REINFORCE trajectory
+    because they were not sampled from the learner policy.
     """
 
-    if max_moves <= 0:
-        raise ValueError("max_moves must be positive")
+    if (
+        isinstance(max_moves, bool)
+        or not isinstance(max_moves, int)
+        or max_moves < 2
+    ):
+        raise ValueError("max_moves must allow at least two forced pass actions")
     if initial_position.is_terminal:
         raise ValueError("cannot generate an episode from a terminal position")
     chosen_player = (
@@ -591,7 +629,8 @@ def generate_policy_gradient_episode(
     current = initial_position
     steps: list[PolicyGradientStep] = []
 
-    for _ in range(max_moves):
+    sampled_move_budget = max_moves - 2
+    for _ in range(sampled_move_budget):
         if current.is_terminal:
             break
         actor = int(current.to_play)
@@ -618,7 +657,7 @@ def generate_policy_gradient_episode(
         current = current.play(action)
 
     if not current.is_terminal:
-        raise RuntimeError("policy-gradient episode did not terminate within max_moves")
+        current = _force_passes_to_termination(current)
     outcome = float(current.outcome(chosen_player))
     if not np.isfinite(outcome) or abs(outcome) > 1.0:
         raise ValueError("terminal outcome must be finite and in [-1, 1]")
@@ -627,13 +666,43 @@ def generate_policy_gradient_episode(
     )
 
 
+def _opening_move_bounds(
+    opening_moves: int | tuple[int, int],
+) -> tuple[int, int, bool]:
+    """Normalize a fixed/ranged SL prefix to inclusive bounds and range mode."""
+
+    if isinstance(opening_moves, int) and not isinstance(opening_moves, bool):
+        if opening_moves < 0:
+            raise ValueError("opening_moves must be non-negative")
+        return opening_moves, opening_moves, False
+
+    if not isinstance(opening_moves, tuple) or len(opening_moves) != 2:
+        raise ValueError(
+            "opening_moves must be a non-negative integer or an inclusive "
+            "(min_moves, max_moves) tuple"
+        )
+    minimum, maximum = opening_moves
+    if (
+        isinstance(minimum, bool)
+        or isinstance(maximum, bool)
+        or not isinstance(minimum, int)
+        or not isinstance(maximum, int)
+        or minimum < 0
+        or maximum < minimum
+    ):
+        raise ValueError(
+            "opening_moves range must contain non-negative integers with min <= max"
+        )
+    return minimum, maximum, True
+
+
 def generate_value_examples(
     initial_position_factory: Callable[[], TrainingPosition],
     supervised_policy: Policy,
     reinforcement_policy: Policy,
     *,
     num_games: int,
-    opening_moves: int,
+    opening_moves: int | tuple[int, int],
     rng: np.random.Generator,
     device: Device = "cpu",
     temperature: float = 1.0,
@@ -643,34 +712,49 @@ def generate_value_examples(
 
     Each distinct game has three phases:
 
-    1. play ``opening_moves`` using the supervised policy;
+    1. play an SL prefix using the supervised policy. ``opening_moves`` may be
+       a fixed non-negative integer or an inclusive ``(min_moves, max_moves)``
+       range sampled independently for every game (the paper samples U and
+       therefore uses an SL prefix of U - 1 moves);
     2. choose one uniformly random legal *board* move (never pass), and retain
        exactly the resulting post-move state; and
-    3. complete the game with the reinforcement policy for both players.
+    3. complete the game with the reinforcement policy for both players,
+       reserving the final two move slots for legal forced passes.
 
     The retained outcome is scored for the side to move in the retained state,
     matching :class:`~alphago_gym.models.ValueNetwork`'s perspective contract.
+    Forced cap passes cannot alter the exactly-one-example-per-game contract.
     """
 
     if isinstance(num_games, bool) or not isinstance(num_games, int) or num_games <= 0:
         raise ValueError("num_games must be a positive integer")
+    minimum_opening, maximum_opening, sample_opening = _opening_move_bounds(
+        opening_moves
+    )
+    minimum_move_budget = maximum_opening + 3  # opening + random + two passes
     if (
-        isinstance(opening_moves, bool)
-        or not isinstance(opening_moves, int)
-        or opening_moves < 0
+        isinstance(max_moves, bool)
+        or not isinstance(max_moves, int)
+        or max_moves < minimum_move_budget
     ):
-        raise ValueError("opening_moves must be a non-negative integer")
-    if max_moves <= 0:
-        raise ValueError("max_moves must be positive")
+        raise ValueError(
+            "max_moves must cover the opening, random move, and two forced pass "
+            "actions"
+        )
 
     examples: list[ValueExample] = []
     for _ in range(num_games):
+        game_opening_moves = (
+            int(rng.integers(minimum_opening, maximum_opening + 1))
+            if sample_opening
+            else minimum_opening
+        )
         current = initial_position_factory()
         if current.is_terminal:
             raise ValueError("initial position factory returned a terminal position")
         moves_played = 0
 
-        for _ in range(opening_moves):
+        for _ in range(game_opening_moves):
             if current.is_terminal:
                 raise RuntimeError("game ended during the supervised opening")
             if moves_played >= max_moves:
@@ -704,9 +788,8 @@ def generate_value_examples(
             np.asarray(current.encode(), dtype=np.float32)
         )
 
-        while not current.is_terminal:
-            if moves_played >= max_moves:
-                raise RuntimeError("value game did not terminate within max_moves")
+        sampled_completion_limit = max_moves - 2
+        while not current.is_terminal and moves_played < sampled_completion_limit:
             action = sample_legal_action(
                 reinforcement_policy,
                 current,
@@ -716,6 +799,9 @@ def generate_value_examples(
             )
             current = current.play(action)
             moves_played += 1
+
+        if not current.is_terminal:
+            current = _force_passes_to_termination(current)
 
         outcome = float(current.outcome(sample_player))
         if not np.isfinite(outcome) or abs(outcome) > 1.0:
