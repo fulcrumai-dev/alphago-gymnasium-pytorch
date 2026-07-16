@@ -666,13 +666,43 @@ def generate_policy_gradient_episode(
     )
 
 
+def _opening_move_bounds(
+    opening_moves: int | tuple[int, int],
+) -> tuple[int, int, bool]:
+    """Normalize a fixed/ranged SL prefix to inclusive bounds and range mode."""
+
+    if isinstance(opening_moves, int) and not isinstance(opening_moves, bool):
+        if opening_moves < 0:
+            raise ValueError("opening_moves must be non-negative")
+        return opening_moves, opening_moves, False
+
+    if not isinstance(opening_moves, tuple) or len(opening_moves) != 2:
+        raise ValueError(
+            "opening_moves must be a non-negative integer or an inclusive "
+            "(min_moves, max_moves) tuple"
+        )
+    minimum, maximum = opening_moves
+    if (
+        isinstance(minimum, bool)
+        or isinstance(maximum, bool)
+        or not isinstance(minimum, int)
+        or not isinstance(maximum, int)
+        or minimum < 0
+        or maximum < minimum
+    ):
+        raise ValueError(
+            "opening_moves range must contain non-negative integers with min <= max"
+        )
+    return minimum, maximum, True
+
+
 def generate_value_examples(
     initial_position_factory: Callable[[], TrainingPosition],
     supervised_policy: Policy,
     reinforcement_policy: Policy,
     *,
     num_games: int,
-    opening_moves: int,
+    opening_moves: int | tuple[int, int],
     rng: np.random.Generator,
     device: Device = "cpu",
     temperature: float = 1.0,
@@ -682,7 +712,10 @@ def generate_value_examples(
 
     Each distinct game has three phases:
 
-    1. play ``opening_moves`` using the supervised policy;
+    1. play an SL prefix using the supervised policy. ``opening_moves`` may be
+       a fixed non-negative integer or an inclusive ``(min_moves, max_moves)``
+       range sampled independently for every game (the paper samples U and
+       therefore uses an SL prefix of U - 1 moves);
     2. choose one uniformly random legal *board* move (never pass), and retain
        exactly the resulting post-move state; and
     3. complete the game with the reinforcement policy for both players,
@@ -695,13 +728,10 @@ def generate_value_examples(
 
     if isinstance(num_games, bool) or not isinstance(num_games, int) or num_games <= 0:
         raise ValueError("num_games must be a positive integer")
-    if (
-        isinstance(opening_moves, bool)
-        or not isinstance(opening_moves, int)
-        or opening_moves < 0
-    ):
-        raise ValueError("opening_moves must be a non-negative integer")
-    minimum_move_budget = opening_moves + 3  # opening + random move + two passes
+    minimum_opening, maximum_opening, sample_opening = _opening_move_bounds(
+        opening_moves
+    )
+    minimum_move_budget = maximum_opening + 3  # opening + random + two passes
     if (
         isinstance(max_moves, bool)
         or not isinstance(max_moves, int)
@@ -714,12 +744,17 @@ def generate_value_examples(
 
     examples: list[ValueExample] = []
     for _ in range(num_games):
+        game_opening_moves = (
+            int(rng.integers(minimum_opening, maximum_opening + 1))
+            if sample_opening
+            else minimum_opening
+        )
         current = initial_position_factory()
         if current.is_terminal:
             raise ValueError("initial position factory returned a terminal position")
         moves_played = 0
 
-        for _ in range(opening_moves):
+        for _ in range(game_opening_moves):
             if current.is_terminal:
                 raise RuntimeError("game ended during the supervised opening")
             if moves_played >= max_moves:
