@@ -58,12 +58,12 @@ def test_step_observation_switches_to_the_next_players_perspective() -> None:
 
 
 def test_intermediate_rewards_are_zero_and_terminal_reward_is_for_actor() -> None:
-    env = GoEnv(size=1, komi=0.5)
+    env = GoEnv(size=2, komi=0.5)
     env.reset()
 
     _, first_reward, first_terminal, first_truncated, _ = env.step(0)
-    _, second_reward, second_terminal, second_truncated, _ = env.step(1)
-    _, reward, terminated, truncated, info = env.step(1)
+    _, second_reward, second_terminal, second_truncated, _ = env.step(4)
+    _, reward, terminated, truncated, info = env.step(4)
 
     assert first_reward == 0.0
     assert second_reward == 0.0
@@ -71,19 +71,19 @@ def test_intermediate_rewards_are_zero_and_terminal_reward_is_for_actor() -> Non
     assert not second_terminal and not second_truncated
     assert terminated
     assert not truncated
-    # Black just made the second pass and wins 1 area point to 0.5 komi.
+    # Black just made the second pass and wins by Chinese area scoring.
     assert reward == 1.0
     assert info["winner"] == BLACK
     assert not info["legal_actions_mask"].any()
 
 
 def test_terminal_reward_can_be_negative_for_the_player_who_acted() -> None:
-    env = GoEnv(size=1, komi=1.5)
+    env = GoEnv(size=2, komi=4.5)
     env.reset()
     env.step(0)
-    env.step(1)
+    env.step(4)
 
-    _, reward, terminated, truncated, info = env.step(1)
+    _, reward, terminated, truncated, info = env.step(4)
 
     assert terminated and not truncated
     assert reward == -1.0
