@@ -54,6 +54,8 @@ def test_position_is_deeply_immutable() -> None:
     assert isinstance(position.history, frozenset)
     with pytest.raises(ValueError, match="read-only"):
         position.board[0, 0] = BLACK
+    with pytest.raises(ValueError, match="WRITEABLE"):
+        position.board.setflags(write=True)
     with pytest.raises(FrozenInstanceError):
         position.to_play = WHITE  # type: ignore[misc]
 
@@ -292,4 +294,3 @@ def test_encode_marks_every_stone_in_one_liberty_groups() -> None:
     expected = np.zeros((3, 3), dtype=np.float32)
     expected[0, :2] = 1.0
     np.testing.assert_array_equal(encoded[3], expected)
-
