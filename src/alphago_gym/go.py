@@ -20,6 +20,39 @@ EMPTY = 0
 _PLAYERS = (BLACK, WHITE)
 
 
+class _ImmutableBoard(np.ndarray):
+    """Read-only ndarray whose shape/type metadata cannot be reassigned.
+
+    A bytes-backed ndarray protects its elements but NumPy still permits
+    metadata-only operations such as ``shape = ...`` and same-size ``resize``.
+    This zero-copy subclass closes those mutation paths while retaining normal
+    ndarray indexing, ufuncs, and view performance.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, board_bytes: bytes, size: int) -> _ImmutableBoard:
+        board = np.frombuffer(board_bytes, dtype=np.int8).reshape(size, size)
+        return board.view(cls)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        del name, value
+        raise AttributeError("GoPosition board metadata is immutable")
+
+    def resize(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise ValueError("GoPosition board shape is immutable; resize is disabled")
+
+    def setflags(
+        self,
+        write: bool | None = None,
+        align: bool | None = None,
+        uic: bool | None = None,
+    ) -> None:
+        del write, align, uic
+        raise ValueError("GoPosition board flags are immutable; WRITEABLE is false")
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class GoPosition:
     """An immutable, alternating-turn Go position.
@@ -83,7 +116,7 @@ class GoPosition:
         # owning ndarray's WRITEABLE flag is reversible via ``setflags`` and
         # would let callers mutate a supposedly frozen position.
         current_key = board.tobytes(order="C")
-        board = np.frombuffer(current_key, dtype=np.int8).reshape(size, size)
+        board = _ImmutableBoard(current_key, size)
         if self.history is None:
             history = frozenset((current_key,))
         else:
