@@ -10,10 +10,12 @@ from torch import nn
 from alphago_gym.go import GoPosition
 from alphago_gym.mcts import (
     AlphaGoMCTS,
+    EdgeStats,
     MCTSConfig,
     NeuralPolicyEvaluator,
     NeuralValueEvaluator,
     PolicyRolloutEvaluator,
+    SearchNode,
 )
 from alphago_gym.models import PolicyNetwork, ValueNetwork
 
@@ -376,6 +378,106 @@ def test_paper_beta_is_represented_by_reciprocal_softmax_temperature() -> None:
     )
 
     np.testing.assert_allclose(actual, expected, rtol=1e-6)
+
+
+def test_selection_uses_separate_paper_q_and_rollout_visit_puct_formula() -> None:
+    config = MCTSConfig(num_simulations=1, c_puct=2.0, mixing_lambda=0.25)
+    search = AlphaGoMCTS(uniform_policy, zero_value, terminal_rollout, config, seed=0)
+    node = SearchNode(
+        OneMovePosition(),
+        edges={
+            0: EdgeStats(
+                prior=0.8,
+                value_sum=1.0,
+                value_visits=2,
+                rollout_sum=-1.0,
+                rollout_visits=9,
+            ),
+            1: EdgeStats(
+                prior=0.2,
+                value_sum=-1.0,
+                value_visits=4,
+                rollout_sum=0.5,
+                rollout_visits=1,
+            ),
+        },
+        expanded=True,
+    )
+    total_rollout_visits = 10
+    expected_scores = {}
+    for action, edge in node.edges.items():
+        q = (1 - config.mixing_lambda) * edge.value_sum / edge.value_visits
+        q += config.mixing_lambda * edge.rollout_sum / edge.rollout_visits
+        u = (
+            config.c_puct
+            * edge.prior
+            * np.sqrt(total_rollout_visits)
+            / (1 + edge.rollout_visits)
+        )
+        expected_scores[action] = q + u
+
+    assert search._select_edge(node) == max(expected_scores, key=expected_scores.get)
+
+
+def test_root_choice_uses_maximum_visits_even_when_q_is_lower() -> None:
+    search = AlphaGoMCTS(uniform_policy, zero_value, terminal_rollout, seed=0)
+    visits = np.array([9, 2])
+    # Priors stand in for any other ranking signal; visits must dominate.
+    priors = np.array([0.01, 0.99])
+    assert search._choose_root_action(visits, priors) == 0
+
+
+def test_three_ply_backup_alternates_value_and_rollout_perspectives() -> None:
+    @dataclass(frozen=True)
+    class ForcedThreePly:
+        to_play: int = 1
+        depth: int = 0
+
+        @property
+        def action_size(self) -> int:
+            return 1
+
+        @property
+        def is_terminal(self) -> bool:
+            return self.depth == 3
+
+        def legal_actions_mask(self) -> np.ndarray:
+            return np.array([not self.is_terminal])
+
+        def play(self, action: int) -> "ForcedThreePly":
+            return ForcedThreePly(-self.to_play, self.depth + 1)
+
+        def outcome(self, player: int) -> float:
+            if not self.is_terminal:
+                raise RuntimeError
+            return float(player)  # Black wins.
+
+        def encode(self) -> np.ndarray:
+            return np.zeros((1, 1, 1), dtype=np.float32)
+
+    perfect_value = lambda position: float(position.to_play)
+    perfect_rollout = lambda position, rng: float(position.to_play)
+    result = AlphaGoMCTS(
+        lambda _: np.ones(1),
+        perfect_value,
+        perfect_rollout,
+        MCTSConfig(num_simulations=3, mixing_lambda=0.5),
+        seed=0,
+    ).search(ForcedThreePly())
+
+    root_edge = result.root.edges[0]
+    child_edge = root_edge.child.edges[0]  # type: ignore[union-attr]
+    grandchild_edge = child_edge.child.edges[0]  # type: ignore[union-attr]
+    for edge, expected, visits in (
+        (root_edge, 1.0, 3),
+        (child_edge, -1.0, 2),
+        (grandchild_edge, 1.0, 1),
+    ):
+        assert edge.value_visits == visits
+        assert edge.rollout_visits == visits
+        assert edge.value_sum / visits == pytest.approx(expected)
+        assert edge.rollout_sum / visits == pytest.approx(expected)
+        assert edge.q_value(0.5) == pytest.approx(expected)
 
 
 def test_neural_evaluators_restore_training_mode_when_model_raises() -> None:
