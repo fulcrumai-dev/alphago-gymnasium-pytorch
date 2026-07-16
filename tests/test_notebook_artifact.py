@@ -58,10 +58,17 @@ def test_notebook_routes_checkpoints_and_checks_accelerator() -> None:
     )
 
     assert "rl_policy = copy.deepcopy(sl_policy)" in code
-    assert "tree_policy = NeuralPolicyEvaluator(sl_policy" in code
-    assert "tree_policy = NeuralPolicyEvaluator(rl_policy" not in code
+    assert "tree_policy = NeuralPolicyEvaluator(\n    sl_policy" in code
+    assert "tree_policy = NeuralPolicyEvaluator(\n    rl_policy" not in code
+    assert "PAPER_POLICY_BETA = 0.67" in code
+    assert "temperature=1.0 / PAPER_POLICY_BETA" in code
     assert "generate_value_examples(" in code
     assert "sl_policy,\n    rl_policy," in code
+    rl_loop = code[code.index("for game_index in range(config[\"rl_games\"])") :]
+    assert rl_loop.index("train_reinforce_epoch(") < rl_loop.index(
+        "opponent_pool.add(rl_policy)"
+    )
+    assert "len(set(checkpoint_fingerprints)) > 1" in rl_loop
     assert "select_device(" in code
     assert "check_env(" in code
     assert "MPS tensor execution" not in code  # success text is backend-neutral

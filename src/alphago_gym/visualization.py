@@ -82,7 +82,7 @@ def plot_board(
     for spine in ax.spines.values():
         spine.set_visible(False)
     if title:
-        ax.set_title(title, fontsize=13, fontweight="semibold", pad=12)
+        ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
     return ax
 
 
@@ -154,7 +154,7 @@ def _heatmap(
             ax.text(column, row, label, ha="center", va="center", fontsize=8)
     ax.set_xticks(range(size), [_column_label(index) for index in range(size)])
     ax.set_yticks(range(size), [str(index + 1) for index in range(size)])
-    ax.set_title(title, fontsize=12, fontweight="semibold")
+    ax.set_title(title, fontsize=12, fontweight="bold")
     ax.tick_params(length=0, labelsize=8)
     figure = ax.figure
     figure.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
@@ -191,4 +191,3 @@ def _stone_size(size: int) -> float:
 
 
 __all__ = ["plot_board", "plot_search_summary"]
-
