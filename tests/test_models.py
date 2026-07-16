@@ -94,7 +94,7 @@ def test_mask_logits_supports_unbatched_logits() -> None:
     assert torch.isneginf(masked[~legal]).all()
     assert torch.equal(masked[legal], logits[legal])
     assert torch.equal(probabilities[~legal], torch.zeros(2))
-    assert probabilities.sum() == pytest.approx(1.0)
+    torch.testing.assert_close(probabilities.sum(), torch.tensor(1.0))
 
 
 def test_masked_softmax_broadcasts_unbatched_mask_over_batch() -> None:
