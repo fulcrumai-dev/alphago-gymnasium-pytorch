@@ -360,6 +360,24 @@ def test_neural_evaluators_mask_actions_bound_values_and_restore_mode() -> None:
         NeuralPolicyEvaluator(policy, temperature=0)
 
 
+def test_paper_beta_is_represented_by_reciprocal_softmax_temperature() -> None:
+    class FixedPolicy(nn.Module):
+        def forward(self, observations: torch.Tensor) -> torch.Tensor:
+            logits = torch.tensor([0.0, 1.0], device=observations.device)
+            return logits.expand(observations.shape[0], -1)
+
+    beta = 0.67
+    raw = torch.softmax(torch.tensor([0.0, 1.0]), dim=-1).numpy()
+    expected = raw**beta
+    expected /= expected.sum()
+
+    actual = NeuralPolicyEvaluator(FixedPolicy(), temperature=1.0 / beta)(
+        OneMovePosition()
+    )
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-6)
+
+
 def test_neural_evaluators_restore_training_mode_when_model_raises() -> None:
     class BrokenModel(nn.Module):
         def forward(self, observations: torch.Tensor) -> torch.Tensor:

@@ -256,6 +256,10 @@ class PolicyRolloutEvaluator:
             if current.is_terminal:
                 return float(current.outcome(start_player))
             legal = np.asarray(current.legal_actions_mask(), dtype=np.bool_)
+            if legal.shape != (current.action_size,):
+                raise ValueError("rollout legal action mask has the wrong shape")
+            if not legal.any():
+                raise ValueError("non-terminal rollout position has no legal actions")
             probabilities = np.asarray(self.policy(current), dtype=np.float64)
             if probabilities.shape != legal.shape:
                 raise ValueError("rollout policy returned the wrong number of actions")
@@ -297,14 +301,16 @@ class NeuralPolicyEvaluator:
         from .models import masked_softmax
 
         was_training = self.model.training
-        self.model.eval()
-        with torch.no_grad():
-            features = torch.as_tensor(position.encode(), dtype=torch.float32)
-            features = features.unsqueeze(0).to(self.device)
-            logits = self.model(features) / self.temperature
-            mask = torch.as_tensor(position.legal_actions_mask(), dtype=torch.bool)
-            probabilities = masked_softmax(logits, mask.to(self.device)).squeeze(0)
-        self.model.train(was_training)
+        try:
+            self.model.eval()
+            with torch.no_grad():
+                features = torch.as_tensor(position.encode(), dtype=torch.float32)
+                features = features.unsqueeze(0).to(self.device)
+                logits = self.model(features) / self.temperature
+                mask = torch.as_tensor(position.legal_actions_mask(), dtype=torch.bool)
+                probabilities = masked_softmax(logits, mask.to(self.device)).squeeze(0)
+        finally:
+            self.model.train(was_training)
         return probabilities.detach().cpu().numpy().astype(np.float64)
 
 
@@ -319,9 +325,11 @@ class NeuralValueEvaluator:
         import torch
 
         was_training = self.model.training
-        self.model.eval()
-        with torch.no_grad():
-            features = torch.as_tensor(position.encode(), dtype=torch.float32)
-            value = self.model(features.unsqueeze(0).to(self.device)).reshape(-1)[0]
-        self.model.train(was_training)
+        try:
+            self.model.eval()
+            with torch.no_grad():
+                features = torch.as_tensor(position.encode(), dtype=torch.float32)
+                value = self.model(features.unsqueeze(0).to(self.device)).reshape(-1)[0]
+        finally:
+            self.model.train(was_training)
         return float(value.detach().cpu())
