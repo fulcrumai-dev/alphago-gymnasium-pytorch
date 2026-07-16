@@ -23,6 +23,7 @@ colab exec --session "$SESSION" --file "$NOTEBOOK" --timeout 1800
 
 uv run --project "$ROOT" python "$ROOT/scripts/scan_notebook.py" "$OUTPUT" \
   --require-text "✓ Gymnasium API" \
-  --require-device cuda
+  --require-device cuda \
+  --allow-output-only-execution
 
 echo "Managed Colab T4 validation artifact: $OUTPUT"

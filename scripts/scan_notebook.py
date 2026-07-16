@@ -30,6 +30,7 @@ def validate_notebook(
     *,
     required_text: tuple[str, ...] = (),
     required_device: str | None = None,
+    allow_output_only_execution: bool = False,
 ) -> tuple[int, str]:
     """Validate outputs and return ``(executed_code_cells, collected_text)``."""
 
@@ -42,7 +43,13 @@ def validate_notebook(
         if cell.cell_type != "code" or not cell.source.strip():
             continue
         code_cells += 1
-        if cell.execution_count is None:
+        # google-colab-cli 0.6.0 writes outputs but leaves execution_count at
+        # null.  Its output-only mode remains strict: every non-empty code cell
+        # must have produced at least one saved output.
+        has_saved_output = bool(cell.get("outputs", []))
+        if cell.execution_count is None and not (
+            allow_output_only_execution and has_saved_output
+        ):
             unexecuted.append(index)
         for output in cell.get("outputs", []):
             if output.output_type == "error":
@@ -79,6 +86,14 @@ def _parse_args() -> argparse.Namespace:
         help="output sentinel that must be present (repeatable)",
     )
     parser.add_argument("--require-device", choices=("cpu", "cuda", "mps"))
+    parser.add_argument(
+        "--allow-output-only-execution",
+        action="store_true",
+        help=(
+            "accept a saved output in every code cell as execution proof; "
+            "needed for google-colab-cli, which omits execution_count"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -92,6 +107,7 @@ def main() -> int:
             args.notebook,
             required_text=tuple(args.require_text),
             required_device=args.require_device,
+            allow_output_only_execution=args.allow_output_only_execution,
         )
     except (RuntimeError, ValueError) as error:
         print(str(error), file=sys.stderr)
@@ -103,4 +119,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

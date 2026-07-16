@@ -126,3 +126,44 @@ def test_scanner_rejects_error_outputs_and_accepts_success(tmp_path: Path) -> No
     )
     assert rejected.returncode != 0
     assert "RuntimeError: boom" in rejected.stderr
+
+
+def test_scanner_has_explicit_colab_cli_output_only_mode(tmp_path: Path) -> None:
+    """Colab CLI 0.6.0 saves outputs while leaving execution_count null."""
+
+    output_only = nbformat.v4.new_notebook(
+        cells=[
+            nbformat.v4.new_code_cell(
+                "print('ok')",
+                execution_count=None,
+                outputs=[
+                    nbformat.v4.new_output(
+                        "stream",
+                        name="stdout",
+                        text="✓ sentinel · CUDA tensor execution\n",
+                    )
+                ],
+            )
+        ]
+    )
+    path = tmp_path / "colab-output.ipynb"
+    nbformat.write(output_only, path)
+    base = [sys.executable, str(ROOT / "scripts" / "scan_notebook.py"), str(path)]
+
+    strict = subprocess.run(base, text=True, capture_output=True)
+    assert strict.returncode != 0
+    assert "unexecuted code cells" in strict.stderr
+
+    colab_compatible = subprocess.run(
+        [
+            *base,
+            "--allow-output-only-execution",
+            "--require-text",
+            "✓ sentinel",
+            "--require-device",
+            "cuda",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert colab_compatible.returncode == 0, colab_compatible.stderr
