@@ -276,6 +276,7 @@ def test_reinforce_epoch_uses_baseline_entropy_and_legal_log_probability() -> No
     assert model.logits.grad is not None
     assert torch.isfinite(model.logits.grad).all()
     assert baseline.value.grad is None
+    assert baseline.training
 
 
 def test_reinforce_keeps_gradient_for_extremely_unlikely_legal_action() -> None:
@@ -390,6 +391,95 @@ def test_alternating_episode_records_only_learner_legal_steps_and_perspective() 
 
 
 @dataclass(frozen=True)
+class PassCappedPosition:
+    """Go-like game that terminates only after two consecutive passes."""
+
+    to_play: int = 1
+    history: tuple[int, ...] = ()
+
+    @property
+    def action_size(self) -> int:
+        return 3
+
+    @property
+    def pass_action(self) -> int:
+        return 2
+
+    @property
+    def is_terminal(self) -> bool:
+        return len(self.history) >= 2 and self.history[-2:] == (2, 2)
+
+    def legal_actions_mask(self) -> np.ndarray:
+        if self.is_terminal:
+            return np.zeros(3, dtype=np.bool_)
+        return np.ones(3, dtype=np.bool_)
+
+    def play(self, action: int) -> "PassCappedPosition":
+        if action < 0 or action >= self.action_size:
+            raise ValueError("invalid action")
+        if not self.legal_actions_mask()[action]:
+            raise ValueError("illegal action")
+        return PassCappedPosition(
+            to_play=-self.to_play,
+            history=self.history + (action,),
+        )
+
+    def outcome(self, player: int) -> float:
+        if not self.is_terminal:
+            raise RuntimeError("game is not terminal")
+        return float(player)  # Black wins this deterministic teaching game.
+
+    def encode(self) -> np.ndarray:
+        last_action = self.history[-1] if self.history else -1
+        return np.array(
+            [[[self.to_play]], [[len(self.history)]], [[last_action]]],
+            dtype=np.float32,
+        )
+
+
+def test_policy_gradient_episode_reserves_unrecorded_forced_passes() -> None:
+    learner_calls: list[int] = []
+    opponent_calls: list[int] = []
+
+    def learner(position: PassCappedPosition) -> np.ndarray:
+        learner_calls.append(len(position.history))
+        return np.array([1.0, 0.0, 0.0])
+
+    def opponent(position: PassCappedPosition) -> np.ndarray:
+        opponent_calls.append(len(position.history))
+        return np.array([1.0, 0.0, 0.0])
+
+    episode = generate_policy_gradient_episode(
+        PassCappedPosition(),
+        learner,
+        opponent,
+        learner_player=1,
+        rng=np.random.default_rng(0),
+        max_moves=4,
+    )
+
+    assert episode.outcome == 1.0
+    assert learner_calls == [0]
+    assert opponent_calls == [1]
+    assert len(episode.steps) == 1
+    assert episode.steps[0].action == 0
+    assert all(
+        step.action != PassCappedPosition().pass_action for step in episode.steps
+    )
+
+
+def test_policy_gradient_episode_requires_budget_for_two_cap_passes() -> None:
+    with pytest.raises(ValueError, match="at least two"):
+        generate_policy_gradient_episode(
+            PassCappedPosition(),
+            lambda _: np.array([1.0, 0.0, 0.0]),
+            lambda _: np.array([1.0, 0.0, 0.0]),
+            rng=np.random.default_rng(0),
+            max_moves=1,
+        )
+
+
+@dataclass(frozen=True)
 class DecorrelatedPosition:
     """Three-ply game exposing game id, sample ply, and random move in encode."""
 
@@ -494,6 +584,48 @@ def test_value_examples_follow_sl_random_move_rl_and_one_per_game_contract() -> 
     np.testing.assert_array_equal(outcomes, np.where(random_actions == 0, 1.0, -1.0))
     assert sl_calls == [(game_id, 0) for game_id in range(200)]
     assert rl_calls == [(game_id, 2) for game_id in range(200)]
+
+
+def test_value_completion_reserves_forced_passes_and_keeps_one_target() -> None:
+    sl_calls: list[int] = []
+    rl_calls: list[int] = []
+
+    def no_pass_sl(position: PassCappedPosition) -> np.ndarray:
+        sl_calls.append(len(position.history))
+        return np.array([1.0, 0.0, 0.0])
+
+    def no_pass_rl(position: PassCappedPosition) -> np.ndarray:
+        rl_calls.append(len(position.history))
+        return np.array([1.0, 0.0, 0.0])
+
+    examples = generate_value_examples(
+        PassCappedPosition,
+        no_pass_sl,
+        no_pass_rl,
+        num_games=1,
+        opening_moves=1,
+        rng=np.random.default_rng(5),
+        max_moves=5,
+    )
+
+    assert len(examples) == 1
+    assert examples[0].outcome == 1.0
+    assert int(examples[0].observation[1, 0, 0]) == 2
+    assert sl_calls == [0]
+    assert rl_calls == [2]
+
+
+def test_value_generation_requires_budget_for_opening_random_move_and_passes() -> None:
+    with pytest.raises(ValueError, match="opening.*random.*two.*pass"):
+        generate_value_examples(
+            PassCappedPosition,
+            lambda _: np.array([1.0, 0.0, 0.0]),
+            lambda _: np.array([1.0, 0.0, 0.0]),
+            num_games=1,
+            opening_moves=1,
+            rng=np.random.default_rng(0),
+            max_moves=3,
+        )
 
 
 def test_value_example_generation_requires_a_legal_non_pass_random_move() -> None:
