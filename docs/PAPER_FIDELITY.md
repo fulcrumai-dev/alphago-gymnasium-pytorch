@@ -272,8 +272,8 @@ Primary contrast sources:
 
 | Area | 2016 paper | This repository | Label and consequence |
 |---|---|---|---|
-| Game size | Fixed 19×19 | 5×5 tutorial default; board size configurable | **Scaled.** Exercises captures, passes, scoring, and search cheaply; 5×5 strategy and distributions are not 19×19 Go. |
-| Rules | Chinese rules, 7.5 komi in evaluation | Chinese area scoring with configurable komi | **Faithful/Scaled.** A smaller board may use a teaching-friendly komi; reported paper scores are not comparable. |
+| Game size | Fixed 19×19 | 3×3 smoke profile, 5×5 tutorial profile; board size configurable | **Scaled.** Exercises captures, passes, scoring, and search cheaply; small-board strategy and distributions are not 19×19 Go. |
+| Rules | Chinese rules, 7.5 komi in evaluation; the paper does not publish its automatic dead-stone protocol, and the formal match had a referee | Capture/suicide/positional-superko plus board-as-is Chinese-style area formula and configurable komi; two passes end play without a dead-stone agreement phase | **Faithful core/Substituted adjudication.** Agents must capture dead groups before passing. Unsettled two-pass positions can score differently from referee-adjudicated Chinese play, so paper match scores are not comparable. |
 | Environment API | Internal Go engine | Gymnasium environment with spaces, masks, seeding, `reset`, and `step` | **Added.** This is an interoperability layer, not a paper claim. |
 | Actions | Board probability map; pass examples excluded from KGS policy data | `size² + 1` actions, including explicit pass | **Added.** Required for a complete reusable environment and terminal two-pass games. |
 | Observation | 48 policy planes / 49 value planes | Eight compact rule/history planes | **Substituted.** Retains player-relative spatial state, but omits most one-hot liberty/capture/history planes and ladder search. |
@@ -281,7 +281,7 @@ Primary contrast sources:
 | Policy capacity | 13 layers, 192 filters in match system | Configurable shallow PyTorch convolutional network; smoke/tutorial profiles use far fewer layers and channels | **Scaled.** Same spatial policy role, radically lower capacity. |
 | SL checkpoint routing | `p_sigma` supplies MCTS priors | A frozen `sl_policy` supplies MCTS priors | **Faithful.** The RL-updated policy is deliberately not substituted as the tree prior. |
 | RL policy | Same network initialized from SL; current policy versus random prior checkpoint; REINFORCE | Separate `rl_policy` initialized from SL and trained against a prior-opponent pool | **Faithful/Scaled.** Preserves the opponent-pool policy-gradient stage with tiny exposed counts. |
-| Value data | One decorrelated position per unique game; SL prefix, one random move, RL suffix | One position per distinct self-play game with an injected random legal move; RL policy generates value data | **Faithful/Scaled.** Preserves decorrelation and distribution broadening; corpus and prefix details are simplified. |
+| Value data | One decorrelated position per unique game; independently sampled SL prefix of U−1 in 0…449, one random move, RL suffix | One position per distinct game; independently sampled SL-prefix length from a profile-scaled range, one random move, RL suffix | **Faithful/Scaled.** Preserves all three phases, per-game prefix variation, and decorrelation with a tiny range/corpus. |
 | Value model | Deep convolutional trunk, FC-256, tanh | Small configurable convolutional value network with tanh | **Scaled.** Same target and range, not paper capacity. |
 | Fast rollout | Incremental linear softmax over handcrafted local patterns | Shallow learned convolutional/linear rollout approximation | **Substituted.** Preserves a distinct fast stochastic playout policy, not its exact feature engineering or speed. |
 | Selection formula | `Q + c P sqrt(sum N_r)/(1+N_r)` | Same prior-guided formula | **Faithful.** This is the 2016 APV-MCTS formula, not evidence that the project targets AlphaGo Zero. |
@@ -289,6 +289,8 @@ Primary contrast sources:
 | Search execution | Asynchronous, lock-free, CPU/GPU, 40 threads; placeholder priors, threshold 40, virtual loss 3 | Synchronous single-process search | **Omitted systems scale.** No virtual loss, asynchronous batching, placeholder tree policy, or expansion threshold. Search invariants are easier to teach and test. |
 | Symmetry | Dataset D8 augmentation; implicit random symmetry ensemble in search | Optional lightweight augmentation where exposed | **Scaled/Omitted.** No claim of the paper's runtime ensemble unless a run explicitly enables it. |
 | Training counts | Millions of games/positions and weeks on 50 GPUs | Tiny `smoke` counts and larger but bounded `tutorial` counts, all configurable | **Scaled.** A successful loss decrease validates code paths, not convergence to AlphaGo strength. |
+| Optimizer | Asynchronous SGD in the published supervised/value methods | Local Adam in the tutorial | **Substituted.** Objectives, labels, and checkpoint routing are preserved; optimizer dynamics and curves are not paper-replication evidence. |
+| Episode cap | Games played to terminal; tournament adjudication details are not published | Final two action slots are forced passes if sampled policies have not terminated; forced actions are excluded from REINFORCE | **Added bounded fallback.** Prevents low-pass toy policies hanging Colab; cap-scored labels are board-as-is and not match-adjudication evidence. |
 | Hardware | Large CPU/GPU installations and a distributed version | One CPU, CUDA GPU, or Apple MPS device | **Scaled/Added portability.** Device parity is an engineering goal beyond the paper. |
 | Playing-strength claim | Professional-level reported experiments | No professional, dan-rank, 99.8%, or paper-Elo claim | **Not reproduced.** Strength comparisons require the original scale and controlled opponents. |
 
@@ -334,13 +336,14 @@ trap 'colab stop --session "$SESSION"' EXIT
 colab status --session "$SESSION"
 colab exec \
   --session "$SESSION" \
-  --file notebooks/alphago_tutorial.ipynb \
+  --file notebooks/alphago_2016_tutorial.ipynb \
   --timeout 1800
 ```
 
 The official CLI's
 [v0.6.0 notebook executor](https://github.com/googlecolab/google-colab-cli/blob/v0.6.0/src/colab_cli/commands/execution.py)
-writes an executed sibling named `notebooks/alphago_tutorial_output.ipynb`. A
+writes an executed sibling named
+`notebooks/alphago_2016_tutorial_output.ipynb`. A
 rigorous validation must retain or summarize four pieces of evidence:
 
 1. `colab version` and the exact command;

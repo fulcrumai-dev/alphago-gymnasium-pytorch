@@ -2,7 +2,7 @@
 
 The implementation deliberately favours clarity over tournament-engine speed.  It
 implements the rules that matter to AlphaGo-style self play: captures, suicide,
-positional superko, passing, and Chinese area scoring.
+positional superko, passing, and a board-as-is area-scoring formula.
 """
 
 from __future__ import annotations
@@ -224,7 +224,12 @@ class GoPosition:
         )
 
     def area_score(self) -> tuple[float, float]:
-        """Return ``(black_score, white_score)`` under Chinese area scoring."""
+        """Return stones plus surrounded area and komi on the current board.
+
+        This is the Chinese-style area formula after dead stones have been
+        captured. There is no separate agreement/adjudication protocol: every
+        stone left on the board at two passes is counted as alive.
+        """
 
         black_score = float(np.count_nonzero(self.board == BLACK))
         white_score = float(np.count_nonzero(self.board == WHITE)) + self.komi
@@ -245,7 +250,7 @@ class GoPosition:
         return black_score, white_score
 
     def outcome(self, player: int) -> int:
-        """Return the Chinese-area result from ``player``'s perspective."""
+        """Return the board-as-is area result from ``player``'s perspective."""
 
         player = _validated_player(player, "player")
         black_score, white_score = self.area_score()

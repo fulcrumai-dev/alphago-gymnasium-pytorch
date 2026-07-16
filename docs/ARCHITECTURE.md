@@ -14,8 +14,10 @@ training stages, and notebook can be tested independently.
 - `play(action)` returns a new position and enforces captures, suicide, and
   positional superko;
 - two consecutive passes terminate the game;
-- `outcome(player)` returns `-1`, `0`, or `1` using Chinese area scoring and
-  komi, from the requested player's perspective;
+- `outcome(player)` returns `-1`, `0`, or `1` using the Chinese-style area
+  formula and komi, from the requested player's perspective. Scoring is
+  board-as-is: there is no separate dead-stone agreement/adjudication phase,
+  so self-play agents must capture dead groups before both pass;
 - `encode()` returns float32 planes from the side-to-move perspective.
 
 `alphago_gym.env.GoEnv` is a Gymnasium adapter over that state. Its observation
@@ -45,4 +47,3 @@ change sign at each ply. Search never mutates the caller's position.
 `smoke` runs in a few minutes on CPU for automated validation. `tutorial` uses
 more examples/simulations but stays Colab-friendly. All scale parameters are
 exposed so readers can increase board size, depth, games, and search budget.
-

@@ -27,6 +27,5 @@
   <path class="edge" d="M520 107 H580"/><text x="550" y="93" class="sub">initialize</text>
   <path class="edge" d="M700 160 V205"/><text x="774" y="190" class="sub">distinct self-play states</text>
   <path class="edge" d="M520 95 C700 0 875 55 920 140"/><path class="edge" d="M520 267 C700 390 875 300 920 236"/><path class="edge" d="M810 267 C860 267 875 230 910 215"/>
-  <text x="42" y="382" class="sub" text-anchor="start">The 2016 search intentionally uses the supervised policy for broad tree priors; the RL policy supplies the value network's self-play distribution.</text>
+  <text x="42" y="382" class="sub" style="text-anchor:start">The 2016 search intentionally uses the supervised policy for broad tree priors; the RL policy supplies the value network's self-play distribution.</text>
 </svg>
-

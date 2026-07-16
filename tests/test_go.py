@@ -270,7 +270,7 @@ def test_legal_action_mask_shape_dtype_and_independence() -> None:
     assert position.legal_actions_mask().all()
 
 
-def test_chinese_area_scoring_counts_stones_and_surrounded_territory() -> None:
+def test_area_scoring_counts_stones_and_surrounded_territory() -> None:
     black_enclosure = np.array(
         [
             [BLACK, BLACK, BLACK],
@@ -286,7 +286,7 @@ def test_chinese_area_scoring_counts_stones_and_surrounded_territory() -> None:
     assert position.outcome(WHITE) == -1
 
 
-def test_chinese_area_scoring_leaves_dame_neutral_and_applies_komi() -> None:
+def test_area_scoring_leaves_dame_neutral_and_applies_komi() -> None:
     mixed = np.array(
         [
             [BLACK, EMPTY, WHITE],
@@ -305,6 +305,23 @@ def test_chinese_area_scoring_leaves_dame_neutral_and_applies_komi() -> None:
     assert empty_with_komi.outcome(WHITE) == 1
     with pytest.raises(ValueError, match="player"):
         empty_with_komi.outcome(EMPTY)
+
+
+def test_area_scoring_is_explicitly_board_as_is_without_dead_stone_adjudication() -> None:
+    unsettled = np.array(
+        [
+            [BLACK, BLACK, BLACK],
+            [BLACK, WHITE, EMPTY],
+            [BLACK, BLACK, BLACK],
+        ],
+        dtype=np.int8,
+    )
+    terminal = GoPosition(size=3, board=unsettled, komi=7.5).play(9).play(9)
+
+    # White's surrounded stone is still counted because neither player
+    # captured it and this environment has no referee/agreement action.
+    assert terminal.area_score() == (7.0, 8.5)
+    assert terminal.outcome(BLACK) == -1
 
 
 def test_encode_has_eight_float32_current_player_feature_planes() -> None:

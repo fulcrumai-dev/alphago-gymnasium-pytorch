@@ -71,7 +71,7 @@ def test_intermediate_rewards_are_zero_and_terminal_reward_is_for_actor() -> Non
     assert not second_terminal and not second_truncated
     assert terminated
     assert not truncated
-    # Black just made the second pass and wins by Chinese area scoring.
+    # Black just made the second pass and wins by board-as-is area scoring.
     assert reward == 1.0
     assert info["winner"] == BLACK
     assert not info["legal_actions_mask"].any()
